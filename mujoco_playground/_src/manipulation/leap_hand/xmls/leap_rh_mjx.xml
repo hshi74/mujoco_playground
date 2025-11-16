@@ -35,18 +35,21 @@
       </default>
       <default class="tip">
         <!-- <geom type="capsule" size="0.012 0.008" pos="0 -0.03 0.015" quat="1 1 0 0" friction="0.7 0.05 0.0002"/> -->
-        <geom size="0.01 0.012 0.016" pos="-0.0012969 -0.0335524 0.0145207" quat="0.703552 0.709596 -0.0292107 -0.0252203" type="box" friction="0.7 0.05 0.0002" rgba=".5 .5 .5 .3"/>
+        <geom size="0.01 0.012 0.016" pos="-0.0012969 -0.0335524 0.0145207"
+          quat="0.703552 0.709596 -0.0292107 -0.0252203" type="box" friction="0.7 0.05 0.0002" rgba=".5 .5 .5 .3"/>
       </default>
       <default class="thumb_tip">
         <!-- <geom type="capsule" size="0.012 0.008" pos="0.0 -0.04 -0.015" quat="1 1 0 0" friction="0.7 0.05 0.0002"/> -->
-        <geom size="0.01 0.012 0.016" pos="-0.00127744 -0.0455619 -0.0144774" quat="0.708101 0.705072 -0.0294902 -0.024426" type="box" friction="0.7 0.05 0.0002" rgba=".5 .5 .5 .3"/>
+        <geom size="0.01 0.012 0.016" pos="-0.00127744 -0.0455619 -0.0144774"
+          quat="0.708101 0.705072 -0.0294902 -0.024426" type="box" friction="0.7 0.05 0.0002" rgba=".5 .5 .5 .3"/>
       </default>
 
       <position kp="3.0" inheritrange="1"/>
       <!-- armature = rotor inertia * gear ratio^2 = 1.7 * 1e-8 * 288*288 = 0.00149376 -->
       <!-- max torque = 0.2196 = 600/1000*0.366 -->
       <!-- frictionloss = rough guess, small ish value -->
-      <!-- <joint axis="0 0 -1" damping="0.2" armature="0.00149376" frictionloss="0.02" actuatorfrcrange="-0.2196 0.2196"/> -->
+      <!-- <joint axis="0 0 -1" damping="0.2" armature="0.00149376" frictionloss="0.02" actuatorfrcrange="-0.2196
+      0.2196"/> -->
       <joint axis="0 0 -1" damping="0.2" armature="0.00149376" actuatorfrcrange="-0.2196 0.2196" frictionloss="0.02"/>
 
       <default class="mcp">
@@ -136,9 +139,11 @@
         <geom name="palm_collision_1" size="0.011 0.013 0.017" pos="-0.009 0.008 -0.011" type="box"/>
         <geom name="palm_collision_2" size="0.011 0.013 0.017" pos="-0.009 -0.037 -0.011" type="box"/>
         <geom name="palm_collision_3" size="0.011 0.013 0.017" pos="-0.009 -0.082 -0.011" type="box"/>
-        <geom name="palm_collision_4" size="0.029 0.01 0.023" pos="-0.066 -0.078 -0.0115" quat="0.989016 0 0 -0.147806" type="box"/>
+        <geom name="palm_collision_4" size="0.029 0.01 0.023" pos="-0.066 -0.078 -0.0115" quat="0.989016 0 0 -0.147806"
+          type="box"/>
         <geom name="palm_collision_5" size="0.01 0.06 0.015" pos="-0.03 -0.035 -0.003" type="box"/>
-        <geom name="palm_collision_6" size="0.005 0.06 0.01" pos="-0.032 -0.035 -0.024" quat="0.923956 0 0.382499 0" type="box"/>
+        <geom name="palm_collision_6" size="0.005 0.06 0.01" pos="-0.032 -0.035 -0.024" quat="0.923956 0 0.382499 0"
+          type="box"/>
         <geom name="palm_collision_7" size="0.012 0.058 0.023" pos="-0.048 -0.033 -0.0115" type="box"/>
         <geom name="palm_collision_8" size="0.022 0.026 0.023" pos="-0.078 -0.053 -0.0115" type="box"/>
         <geom name="palm_collision_9" size="0.002 0.018 0.017" pos="-0.098 -0.009 -0.006" type="box"/>
@@ -156,7 +161,6 @@
             <geom name="if_px_visual" pos="0.0096 0.0002 0.0007" quat="0.500003 -0.5 -0.5 -0.499997" class="visual"
               mesh="proximal"/>
             <geom name="if_px_collision" size="0.017 0.013 0.011" pos="0.0075 -0.0002 -0.011" type="box"/>
-
             <body name="if_md" pos="0.015 0.0143 -0.013" quat="0.500003 0.5 -0.5 0.499997">
               <inertial pos="0.0054215 -0.029148 0.015" quat="0.687228 0.687228 0.166487 0.166487" mass="0.037"
                 diaginertia="8.28004e-06 8.1598e-06 5.39516e-06"/>
@@ -258,7 +262,8 @@
             <inertial pos="0 0 -0.0070806" quat="0.707107 0.707107 0 0" mass="0.003"
               diaginertia="6.1932e-07 5.351e-07 2.1516e-07"/>
             <joint name="th_axl" class="thumb_axl"/>
-            <geom name="th_bs_collision_1" pos="0.01196 0 -0.0158" quat="0.707109 0.707105 0 0" class="visual" mesh="thumb_base"/>
+            <geom name="th_bs_collision_1" pos="0.01196 0 -0.0158" quat="0.707109 0.707105 0 0" class="visual"
+              mesh="thumb_base"/>
             <body name="th_px" pos="0 0.0145 -0.017" quat="0.707109 -0.707105 0 0">
               <inertial pos="-0.0020593 0.015912 -0.013733" quat="0.698518 0.697382 -0.104933 0.121324" mass="0.038"
                 diaginertia="9.87104e-06 9.32653e-06 4.36203e-06"/>
