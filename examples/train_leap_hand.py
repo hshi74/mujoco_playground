@@ -20,12 +20,15 @@ import json
 import os
 import time
 import warnings
-from typing import Any, Dict
+from collections import OrderedDict
+from typing import Any, Dict, List
 
 import jax
 import mediapy as media
 import mujoco
+import numpy as np
 import tensorboardX
+import torch
 from absl import app, flags, logging
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
@@ -159,6 +162,151 @@ _TRAINING_METRICS_STEPS = flags.DEFINE_integer(
 )
 
 
+def load_jax_ckpt_to_torch(
+    jax_params: Any, layer_dims: List[int]
+) -> Dict[str, Dict[str, torch.Tensor]]:
+    """Convert JAX model parameters to PyTorch format for cross-framework compatibility."""
+    if jax_params is None or len(layer_dims) < 2:
+        return {"model_state_dict": {}}
+
+    actor_params = {}
+    if isinstance(jax_params, (list, tuple)) and len(jax_params) > 1:
+        actor_params = jax_params[1].get("params", {})
+
+    model_state: Dict[str, torch.Tensor] = {}
+    total_linears = len(layer_dims) - 1
+
+    for idx in range(total_linears):
+        key = f"hidden_{idx}"
+        tensors = actor_params.get(key)
+        if not tensors:
+            logging.debug("Missing actor layer '%s' in JAX params.", key)
+            continue
+
+        weight = np.array(tensors.get("kernel"))
+        bias = np.array(tensors.get("bias"))
+        expected_shape = (int(layer_dims[idx + 1]), int(layer_dims[idx]))
+        transposed = weight.T
+        if weight.shape != expected_shape and transposed.shape == expected_shape:
+            weight = transposed
+        elif weight.shape != expected_shape:
+            logging.debug(
+                "Unexpected kernel shape for %s: %s (expected %s)",
+                key,
+                weight.shape,
+                expected_shape,
+            )
+
+        if idx == total_linears - 1:
+            name = "body.linear_out"
+        else:
+            name = f"body.linear_{idx}"
+
+        model_state[f"{name}.weight"] = torch.tensor(weight, dtype=torch.float32)
+        model_state[f"{name}.bias"] = torch.tensor(bias, dtype=torch.float32)
+
+    return {"model_state_dict": model_state}
+
+
+def export_onnx(
+    params,
+    eval_env,
+    logdir: epath.Path,
+    wandb_run,
+    hidden_layer_sizes: List[int],
+    policy_obs_key: str,
+) -> None:
+    obs_spec = eval_env.observation_size
+    if isinstance(obs_spec, dict):
+        obs_spec = obs_spec.get(policy_obs_key) or next(iter(obs_spec.values()))
+    if isinstance(obs_spec, tuple):
+        obs_dim = int(np.prod(obs_spec))
+    else:
+        obs_dim = int(obs_spec)
+    action_dim = eval_env.action_size
+
+    stats = getattr(params[0], "mean", {})
+    std_stats = getattr(params[0], "std", {})
+    obs_mean = stats.get(policy_obs_key)
+    obs_std = std_stats.get(policy_obs_key)
+    if obs_mean is None or obs_std is None:
+        logging.warning(
+            "Observation statistics missing; ONNX export will be unnormalized."
+        )
+        obs_mean = np.zeros(obs_dim, dtype=np.float32)
+        obs_std = np.ones(obs_dim, dtype=np.float32)
+    obs_mean = np.asarray(obs_mean).reshape(-1).astype(np.float32)
+    obs_std = np.asarray(obs_std).reshape(-1).astype(np.float32)
+    obs_std = np.where(obs_std > 0, obs_std, 1.0)
+
+    class NormalizeLayer(torch.nn.Module):
+        def __init__(self, mean_vec, std_vec):
+            super().__init__()
+            self.register_buffer("mean", torch.from_numpy(mean_vec))
+            self.register_buffer("inv_std", torch.from_numpy(1.0 / std_vec))
+
+        def forward(self, x):
+            return (x - self.mean) * self.inv_std
+
+    layer_dims: List[int] = (
+        [obs_dim] + [int(h) for h in hidden_layer_sizes] + [action_dim * 2]
+    )
+
+    layer_dict: OrderedDict[str, torch.nn.Module] = OrderedDict()
+    layer_dict["normalize"] = NormalizeLayer(obs_mean, obs_std)
+    last_dim = obs_dim
+    for idx, hidden in enumerate(hidden_layer_sizes):
+        layer_dict[f"linear_{idx}"] = torch.nn.Linear(last_dim, int(hidden))
+        layer_dict[f"act_{idx}"] = torch.nn.SiLU()
+        last_dim = int(hidden)
+    layer_dict["linear_out"] = torch.nn.Linear(last_dim, action_dim * 2)
+
+    class ActorModel(torch.nn.Module):
+        def __init__(self, layers: OrderedDict[str, torch.nn.Module], act_dim: int):
+            super().__init__()
+            self.body = torch.nn.Sequential(layers)
+            self.action_dim = act_dim
+
+        def forward(self, x):
+            logits = self.body(x)
+            mean, _ = torch.split(logits, [self.action_dim, self.action_dim], dim=-1)
+            return torch.tanh(mean)
+
+    actor_network = ActorModel(layer_dict, action_dim)
+    actor_network.eval()
+
+    state_dict = load_jax_ckpt_to_torch(params, layer_dims).get("model_state_dict", {})
+    if state_dict:
+        actor_network.load_state_dict(state_dict, strict=False)
+
+    dummy_input = torch.zeros((1, obs_dim), dtype=torch.float32)
+    onnx_path = logdir / "policy.onnx"
+    torch.onnx.export(
+        actor_network,
+        dummy_input,
+        str(onnx_path),
+        input_names=["obs"],
+        output_names=["action"],
+    )
+    logging.info("Policy exported to ONNX at %s", onnx_path)
+    if not onnx_path.exists():
+        logging.warning("ONNX file was not created!")
+        return
+
+    if wandb_run is None:
+        return
+
+    artifact = wandb.Artifact(name="policy", type="model", metadata={})
+    artifact.add_file(str(onnx_path))
+    for filename in ("env_config.json", "train_config.json", "args.json"):
+        file_path = logdir / filename
+        if file_path.exists():
+            artifact.add_file(str(file_path))
+
+    wandb_run.log_artifact(artifact, aliases=["latest", os.path.basename(logdir)])
+    logging.info("ONNX artifact logged to wandb.")
+
+
 def get_rl_config(env_name: str) -> config_dict.ConfigDict:
     if env_name in mujoco_playground.manipulation._envs:
         return manipulation_params.brax_ppo_config(env_name, _IMPL.value)
@@ -168,14 +316,6 @@ def get_rl_config(env_name: str) -> config_dict.ConfigDict:
         return dm_control_suite_params.brax_ppo_config(env_name, _IMPL.value)
 
     raise ValueError(f"Env {env_name} not found in {registry.ALL_ENVS}.")
-
-
-def _scalar(value):
-    """Converts JAX/NumPy scalars to Python floats for logging."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(jax.device_get(value))
 
 
 def print_metrics(
@@ -231,31 +371,30 @@ def format_metrics(metrics: Dict[str, float], step: int) -> Dict[str, float]:
     """Formats metrics to match the wandb schema used by train_mjx."""
     grouped = {"env_step": int(step)}
     for key, value in metrics.items():
-        scalar = _scalar(value)
         prefix = key.split("/")[0]
         if "sum_reward" in key:
             tag = "Train" if prefix.startswith("episode") else "Eval"
-            grouped[f"{tag}/mean_reward"] = scalar
+            grouped[f"{tag}/mean_reward"] = value
         elif "length" in key:
             tag = "Train" if prefix.startswith("episode") else "Eval"
-            grouped[f"{tag}/mean_episode_length"] = scalar
+            grouped[f"{tag}/mean_episode_length"] = value
         elif "loss" in key:
-            grouped[f"Loss/{key.split('/')[-1]}"] = scalar
+            grouped[f"Loss/{key.split('/')[-1]}"] = value
         elif "sps" in key:
-            grouped["Perf/total_fps"] = scalar
+            grouped["Perf/total_fps"] = value
         elif key.startswith("eval/"):
             name = key.split("/")[-1]
             if name.startswith("episode_"):
                 name = name.replace("episode_", "")
-            grouped[f"Eval/{name}"] = scalar
+            grouped[f"Eval/{name}"] = value
         elif key.startswith("episode/"):
-            grouped[f"Episode/{key.split('/')[-1]}"] = scalar
+            grouped[f"Episode/{key.split('/')[-1]}"] = value
         else:
             parts = key.split("/", 1)
             if len(parts) == 2:
-                grouped[f"{parts[0].capitalize()}/{parts[1]}"] = scalar
+                grouped[f"{parts[0].capitalize()}/{parts[1]}"] = value
             else:
-                grouped[parts[0].capitalize()] = scalar
+                grouped[parts[0].capitalize()] = value
     return grouped
 
 
@@ -432,8 +571,6 @@ def main(argv):
     if "num_eval_envs" in training_params:
         del training_params["num_eval_envs"]
 
-    run_evals_flag = getattr(ppo_params, "run_evals", True)
-
     train_fn = functools.partial(
         ppo.train,
         **training_params,
@@ -444,7 +581,7 @@ def main(argv):
         wrap_env_fn=wrapper.wrap_for_brax_training,
         num_eval_envs=num_eval_envs,
         log_training_metrics=True,
-        run_evals=run_evals_flag,
+        run_evals=False,
     )
 
     # Load evaluation environment.
@@ -514,7 +651,7 @@ def main(argv):
         for vid_idx, rollout in enumerate(trajectories):
             traj = rollout[::render_stride]
             frames = eval_env.render(
-                traj, height=480, width=640, scene_option=scene_option
+                traj, height=480, width=640, scene_option=scene_option, camera="side"
             )
             suffix = "" if num_videos == 1 else str(vid_idx)
             video_path = video_dir / f"{prefix}{suffix}_rollout.mp4"
@@ -623,6 +760,25 @@ def main(argv):
             num_videos=_NUM_EVAL_VIDEOS.value,
             render_stride=2,
         )
+
+    hidden_sizes = []
+    policy_obs_key = "state"
+    if hasattr(ppo_params, "network_factory"):
+        hidden_sizes = list(
+            getattr(ppo_params.network_factory, "policy_hidden_layer_sizes", [])
+        )
+        policy_obs_key = getattr(
+            ppo_params.network_factory, "policy_obs_key", policy_obs_key
+        )
+
+    export_onnx(
+        params=params,
+        eval_env=eval_env,
+        logdir=logdir,
+        wandb_run=wandb_run,
+        hidden_layer_sizes=hidden_sizes,
+        policy_obs_key=policy_obs_key,
+    )
 
 
 if __name__ == "__main__":
