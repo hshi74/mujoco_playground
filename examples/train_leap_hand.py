@@ -298,6 +298,7 @@ def export_onnx(
 
     artifact = wandb.Artifact(name="policy", type="model", metadata={})
     artifact.add_file(str(onnx_path))
+    artifact.add_file(str(logdir / "policy.onnx.data"))
     for filename in ("env_config.json", "train_config.json", "args.json"):
         file_path = logdir / filename
         if file_path.exists():

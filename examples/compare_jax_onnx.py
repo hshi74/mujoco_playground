@@ -14,9 +14,9 @@ from ml_collections import config_dict
 
 # Set these paths before running the script.
 JAX_CHECKPOINT_PATH = epath.Path(
-    "results/LeapCubeReorient-20251116-081905/checkpoints/000205455360"
+    "results/LeapCubeReorient-20251116-102751/checkpoints/000024903680"
 ).resolve()
-ONNX_PATH = epath.Path("results/LeapCubeReorient-20251116-093353/policy.onnx").resolve()
+ONNX_PATH = epath.Path("results/LeapCubeReorient-20251116-102751/policy.onnx").resolve()
 OBS_KEY = "state"
 NUM_SAMPLES = 1
 SEED = 0
