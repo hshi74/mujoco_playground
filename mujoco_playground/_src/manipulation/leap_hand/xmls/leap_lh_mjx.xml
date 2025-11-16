@@ -62,13 +62,13 @@
         <joint range="-2.094 0.349"/>
       </default>
       <default class="thumb_axl">
-        <joint range="-0.349 2.094"/>
+        <joint range="-2.094 0.349"/>
       </default>
       <default class="thumb_mcp">
         <joint range="-0.47 2.443"/>
       </default>
       <default class="thumb_ipl">
-        <joint range="-1.34 1.88"/>
+        <joint range="-1.88 1.34"/>
       </default>
 
     </default>
