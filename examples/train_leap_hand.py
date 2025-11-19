@@ -14,10 +14,13 @@
 # ==============================================================================
 """Train a PPO agent using JAX on the specified environment."""
 
+import os
+
+os.environ["USE_JAX"] = "true"
+
 import datetime
 import functools
 import json
-import os
 import time
 import warnings
 from collections import OrderedDict
@@ -30,6 +33,7 @@ import numpy as np
 import tensorboardX
 import torch
 from absl import app, flags, logging
+from brax.training.agents.ppo import checkpoint
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
 from etils import epath
@@ -85,7 +89,10 @@ _USE_TB = flags.DEFINE_boolean(
     "use_tb", False, "Use TensorBoard for logging (ignored in play-only mode)"
 )
 _DOMAIN_RANDOMIZATION = flags.DEFINE_boolean(
-    "domain_randomization", False, "Use domain randomization"
+    "domain_randomization", True, "Use domain randomization"
+)
+_USE_COMPLIANCE = flags.DEFINE_boolean(
+    "use_compliance", False, "Use compliance control"
 )
 _SEED = flags.DEFINE_integer("seed", 1, "Random seed")
 _NUM_TIMESTEPS = flags.DEFINE_integer(
@@ -407,6 +414,8 @@ def main(argv):
     # Load environment configuration
     env_cfg = registry.get_default_config(_ENV_NAME.value)
     env_cfg["impl"] = _IMPL.value
+    if _USE_COMPLIANCE.value:
+        env_cfg["use_compliance"] = True
 
     ppo_params = get_rl_config(_ENV_NAME.value)
 
@@ -740,12 +749,45 @@ def main(argv):
         last_render_step = current_step
 
     # Train or load the model
-    make_inference_fn, params, _ = train_fn(  # pylint: disable=no-value-for-parameter
-        environment=env,
-        progress_fn=progress,
-        policy_params_fn=policy_params_fn,
-        eval_env=eval_env,
-    )
+    try:
+        train_fn(  # pylint: disable=no-value-for-parameter
+            environment=env,
+            progress_fn=progress,
+            policy_params_fn=policy_params_fn,
+            eval_env=eval_env,
+        )
+    except (KeyboardInterrupt, jax.errors.JaxRuntimeError) as e:
+        if isinstance(e, KeyboardInterrupt) or "KeyboardInterrupt" in str(e):
+            print("Training interrupted by user.")
+        else:
+            raise e
+
+    print(f"Loading best checkpoint from step {best_ckpt_step}...")
+
+    if _PLAY_ONLY.value:
+        load_path = restore_checkpoint_path
+    else:
+        available_ckpts = {}
+        for path in ckpt_path.iterdir():
+            if path.is_dir() and path.name.isdigit():
+                available_ckpts[int(path.name)] = path.name
+
+        load_path = None
+        if available_ckpts:
+            # Find closest checkpoint to best_ckpt_step
+            closest_step = min(
+                available_ckpts.keys(), key=lambda x: abs(x - best_ckpt_step)
+            )
+            print(f"Closest checkpoint to best step {best_ckpt_step} is {closest_step}")
+            load_path = ckpt_path / available_ckpts[closest_step]
+
+    if load_path:
+        print(f"Loading policy from {load_path}...")
+        final_policy = checkpoint.load_policy(load_path)
+        params = checkpoint.load(load_path)
+    else:
+        print("No checkpoints found. Exiting.")
+        return
 
     print("Done training.")
     if len(times) > 1:
@@ -754,7 +796,6 @@ def main(argv):
 
     print("Starting inference...")
     if eval_env is not None and _NUM_EVAL_VIDEOS.value > 0:
-        final_policy = make_inference_fn(params, deterministic=True)
         record_rollouts(
             final_policy,
             prefix="final",
