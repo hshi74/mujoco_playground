@@ -29,8 +29,8 @@ from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as
 
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
-      ctrl_dt=0.05,
-      sim_dt=0.01,
+      ctrl_dt=0.02,
+      sim_dt=0.005,
       action_scale=0.6,
       action_repeat=1,
       episode_length=500,

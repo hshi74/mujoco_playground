@@ -65,7 +65,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="absl")
 
 _ENV_NAME = flags.DEFINE_string(
     "env_name",
-    "LeapCubeReorient",
+    "LeapCubeRotateZAxis",
     f"Name of the environment. One of {', '.join(registry.ALL_ENVS)}",
 )
 _IMPL = flags.DEFINE_enum("impl", "jax", ["jax", "warp"], "MJX implementation")
