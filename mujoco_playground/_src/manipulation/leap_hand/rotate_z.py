@@ -22,7 +22,7 @@ import numpy as np
 from ml_collections import config_dict
 from mujoco import mjx
 
-from mujoco_playground._src import mjx_env
+from mujoco_playground._src import mjx_env, reward
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
 from mujoco_playground._src.manipulation.leap_hand import compliance_control
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
@@ -30,7 +30,7 @@ from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as
 
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
-        ctrl_dt=0.02,
+        ctrl_dt=0.05,
         sim_dt=0.01,
         action_scale=0.6,
         action_repeat=1,
@@ -51,6 +51,7 @@ def default_config() -> config_dict.ConfigDict:
         ),
         reward_config=config_dict.create(
             scales=config_dict.create(
+                position=1.0,
                 angvel=1.0,
                 linvel=0.0,
                 pose=0.0,
@@ -314,16 +315,24 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         metrics: dict[str, Any],
         done: jax.Array,
     ) -> dict[str, jax.Array]:
-        del metrics  # Unused.
+        del done, metrics  # Unused.
+
         cube_pos = self.get_cube_position(data)
         palm_pos = self.get_palm_position(data)
-        cube_pos_error = palm_pos - cube_pos
+        cube_pose_mse = jp.linalg.norm(palm_pos - cube_pos)
+        cube_pos_reward = reward.tolerance(
+            cube_pose_mse, (0, 0.02), margin=0.05, sigmoid="linear"
+        )
         cube_angvel = self.get_cube_angvel(data)
         cube_linvel = self.get_cube_linvel(data)
+
+        terminated = self._get_termination(data)
+
         return {
-            "angvel": self._reward_angvel(cube_angvel, cube_pos_error),
+            "angvel": self._reward_angvel(cube_angvel),
             "linvel": self._cost_linvel(cube_linvel),
-            "termination": done,
+            "position": cube_pos_reward,
+            "termination": terminated,
             "action_rate": self._cost_action_rate(
                 action, info["last_act"], info["last_last_act"]
             ),
@@ -343,11 +352,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
     def _cost_linvel(self, cube_linvel: jax.Array) -> jax.Array:
         return jp.linalg.norm(cube_linvel, ord=1, axis=-1)
 
-    def _reward_angvel(
-        self, cube_angvel: jax.Array, cube_pos_error: jax.Array
-    ) -> jax.Array:
+    def _reward_angvel(self, cube_angvel: jax.Array) -> jax.Array:
         # Unconditionally maximize angvel in the z-direction.
-        del cube_pos_error  # Unused.
         return cube_angvel @ jp.array([0.0, 0.0, 1.0])
 
     def _cost_action_rate(
