@@ -68,7 +68,7 @@
         <joint range="-0.47 2.443"/>
       </default>
       <default class="thumb_ipl">
-        <joint range="-1.88 1.34"/>
+        <joint range="-1.34 1.88"/>
       </default>
 
     </default>
