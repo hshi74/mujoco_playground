@@ -21,11 +21,14 @@ os.environ["USE_JAX"] = "true"
 import datetime
 import functools
 import json
+import os
+import pathlib
 import time
 import warnings
 from collections import OrderedDict
 from typing import Any, Dict, List
 
+import git
 import jax
 import mediapy as media
 import mujoco
@@ -93,6 +96,9 @@ _DOMAIN_RANDOMIZATION = flags.DEFINE_boolean(
 )
 _USE_COMPLIANCE = flags.DEFINE_boolean(
     "use_compliance", False, "Use compliance control"
+)
+_ACTION_SCALE = flags.DEFINE_float(
+    "action_scale", 1.0, "Override the environment action scaling factor"
 )
 _SEED = flags.DEFINE_integer("seed", 1, "Random seed")
 _NUM_TIMESTEPS = flags.DEFINE_integer(
@@ -167,6 +173,34 @@ _TRAINING_METRICS_STEPS = flags.DEFINE_integer(
     "Number of steps between logging training metrics. Increase if training"
     " experiences slowdown.",
 )
+
+
+def store_code_state(logdir, repositories) -> list:
+    git_log_dir = os.path.join(logdir, "git")
+    os.makedirs(git_log_dir, exist_ok=True)
+    file_paths = []
+    for repository_file_path in repositories:
+        try:
+            repo = git.Repo(repository_file_path, search_parent_directories=True)
+            t = repo.head.commit.tree
+        except Exception:
+            print(f"Could not find git repository in {repository_file_path}. Skipping.")
+            # skip if not a git repository
+            continue
+        # get the name of the repository
+        repo_name = pathlib.Path(repo.working_dir).name
+        diff_file_name = os.path.join(git_log_dir, f"{repo_name}.diff")
+        # check if the diff file already exists
+        if os.path.isfile(diff_file_name):
+            continue
+        # write the diff file
+        print(f"Storing git diff for '{repo_name}' in: {diff_file_name}")
+        with open(diff_file_name, "x", encoding="utf-8") as f:
+            content = f"--- git status ---\n{repo.git.status()} \n\n\n--- git diff ---\n{repo.git.diff(t)}"
+            f.write(content)
+        # add the file path to the list of files to be uploaded
+        file_paths.append(diff_file_name)
+    return file_paths
 
 
 def load_jax_ckpt_to_torch(
@@ -416,6 +450,8 @@ def main(argv):
     env_cfg["impl"] = _IMPL.value
     if _USE_COMPLIANCE.value:
         env_cfg["use_compliance"] = True
+    if _ACTION_SCALE.present:
+        env_cfg["action_scale"] = _ACTION_SCALE.value
 
     ppo_params = get_rl_config(_ENV_NAME.value)
 
@@ -506,6 +542,8 @@ def main(argv):
         json.dump(env_config_dict, fp, indent=2)
     with (logdir / "train_config.json").open("w", encoding="utf-8") as fp:
         json.dump(train_config_dict, fp, indent=2)
+
+    store_code_state(str(logdir), ".")
 
     # Initialize Weights & Biases if required
     wandb_run = None
@@ -668,14 +706,13 @@ def main(argv):
             media.write_video(str(video_path), frames, fps=fps)
             print(f"Rollout video saved to '{video_path}'.")
             if wandb_run is not None:
-                wandb_run.log(
-                    {
-                        f"Videos/{prefix}{suffix}": wandb.Video(
-                            str(video_path), format="mp4"
-                        )
-                    },
-                    commit=False,
-                )
+                wandb_video = wandb.Video(str(video_path), format="mp4")
+                if "eval" in prefix:
+                    wandb_run.log({f"Eval/{prefix}{suffix}": wandb_video}, commit=False)
+                else:
+                    wandb_run.log(
+                        {f"Videos/{prefix}{suffix}": wandb_video}, commit=False
+                    )
 
     times = [time.monotonic()]
     best_episode_reward = float("-inf")
@@ -798,7 +835,7 @@ def main(argv):
     if eval_env is not None and _NUM_EVAL_VIDEOS.value > 0:
         record_rollouts(
             final_policy,
-            prefix="final",
+            prefix="eval",
             num_videos=_NUM_EVAL_VIDEOS.value,
             render_stride=2,
         )

@@ -24,30 +24,23 @@ from mujoco import mjx
 
 from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
-from mujoco_playground._src.manipulation.leap_hand import compliance_control
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
 
 
 def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
-        ctrl_dt=0.02,
-        sim_dt=0.005,
+        ctrl_dt=0.05,
+        sim_dt=0.01,
         action_scale=0.6,
         action_repeat=1,
-        episode_length=1000,
+        episode_length=500,
+        early_termination=True,
         history_len=1,
-        obs_noise=config_dict.create(
+        noise_config=config_dict.create(
             level=1.0,
             scales=config_dict.create(
                 joint_pos=0.05,
             ),
-        ),
-        use_compliance=False,
-        compliance_config=config_dict.create(
-            normal_pos_stiffness=80.0,
-            tangent_pos_stiffness=400.0,
-            normal_rot_stiffness=20.0,
-            tangent_rot_stiffness=40.0,
         ),
         reward_config=config_dict.create(
             scales=config_dict.create(
@@ -82,67 +75,16 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         self._post_init()
 
     def _post_init(self) -> None:
-        home_key = self._mj_model.keyframe("home")
-        self._init_q = jp.array(home_key.qpos)
-        self._lowers = self._mj_model.actuator_ctrlrange[:, 0]
-        self._uppers = self._mj_model.actuator_ctrlrange[:, 1]
         self._hand_qids = mjx_env.get_qpos_ids(self.mj_model, consts.JOINT_NAMES)
         self._hand_dqids = mjx_env.get_qvel_ids(self.mj_model, consts.JOINT_NAMES)
         self._cube_qids = mjx_env.get_qpos_ids(self.mj_model, ["cube_freejoint"])
         self._floor_geom_id = self._mj_model.geom("floor").id
         self._cube_geom_id = self._mj_model.geom("cube").id
+
+        home_key = self._mj_model.keyframe("home")
+        self._init_q = jp.array(home_key.qpos)
         self._default_pose = self._init_q[self._hand_qids]
-
-        self._fingertip_site_ids = np.array(
-            [self._mj_model.site(name).id for name in consts.FINGERTIP_NAMES]
-        )
-        self._arm_rows = np.arange(len(consts.ACTUATOR_NAMES))
-
-    def get_stiffness_damping(
-        self, site_mats: jax.Array
-    ) -> tuple[jax.Array, jax.Array]:
-        cfg = self._config.compliance_config
-
-        # Construct diagonal stiffness matrix in local frame
-        k_local = jp.diag(
-            jp.array(
-                [
-                    cfg.tangent_pos_stiffness,
-                    cfg.tangent_pos_stiffness,
-                    cfg.normal_pos_stiffness,
-                    cfg.tangent_rot_stiffness,
-                    cfg.tangent_rot_stiffness,
-                    cfg.normal_rot_stiffness,
-                ]
-            )
-        )
-
-        # Expand to batch size (num_sites)
-        k_local = jp.broadcast_to(k_local, (len(self._fingertip_site_ids), 6, 6))
-
-        # Construct rotation matrix for 6D spatial vector
-        # [R, 0]
-        # [0, R]
-        rot_6d = jp.zeros((len(self._fingertip_site_ids), 6, 6))
-        rot_6d = rot_6d.at[:, :3, :3].set(site_mats)
-        rot_6d = rot_6d.at[:, 3:, 3:].set(site_mats)
-
-        # Rotate stiffness to world frame: K_world = R * K_local * R^T
-        k_world = rot_6d @ k_local @ jp.swapaxes(rot_6d, -1, -2)
-
-        # Extract 3x3 blocks for pos and rot
-        kp_pos = k_world[:, :3, :3]
-        kp_rot = k_world[:, 3:, 3:]
-
-        # Compute damping matrices
-        kd_pos = compliance_control.get_damping_matrix(
-            kp_pos, 1.0
-        )  # Assuming unit mass for now
-        kd_rot = compliance_control.get_damping_matrix(
-            kp_rot, 1.0
-        )  # Assuming unit inertia for now
-
-        return kp_pos, kd_pos, kp_rot, kd_rot
+        self._lowers, self._uppers = self.mj_model.actuator_ctrlrange.T
 
     def reset(self, rng: jax.Array) -> mjx_env.State:
         # Randomize hand qpos and qvel.
@@ -168,8 +110,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         data = mjx_env.make_data(
             self._mj_model,
             qpos=qpos,
-            ctrl=q_hand,
             qvel=qvel,
+            ctrl=q_hand,
             mocap_pos=jp.array([-100.0, -100.0, -100.0]),  # Hide goal for task.
             impl=self._mjx_model.impl.value,
             nconmax=self._config.nconmax,
@@ -181,58 +123,26 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
             "last_act": jp.zeros(self.mjx_model.nu),
             "last_last_act": jp.zeros(self.mjx_model.nu),
             "motor_targets": data.ctrl,
-            "qpos_error_history": jp.zeros(self._config.history_len * 16),
-            "x_prev": jp.zeros(
-                (len(self._fingertip_site_ids), 6)
-            ),  # TODO:  use default pose
-            "v_prev": jp.zeros((len(self._fingertip_site_ids), 6)),
+            "last_cube_angvel": jp.zeros(3),
         }
 
         metrics = {}
         for k in self._config.reward_config.scales.keys():
             metrics[f"reward/{k}"] = jp.zeros(())
 
-        obs = self._get_obs(data, info)
+        obs_history = jp.zeros(self._config.history_len * 32)
+        obs = self._get_obs(data, info, obs_history)
         reward, done = jp.zeros(2)  # pylint: disable=redefined-outer-name
         return mjx_env.State(data, obs, reward, done, metrics, info)
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
-        delta = action * self._config.action_scale
-        # motor_targets = state.data.ctrl + delta
-        motor_targets = self._default_pose + delta
-        motor_targets = jp.clip(motor_targets, self._lowers, self._uppers)
-
-        if self._config.use_compliance:
-            data = state.data
-            site_xmat = data.site_xmat[self._fingertip_site_ids]
-            site_mats = site_xmat.reshape(-1, 3, 3)
-
-            kp_pos, kd_pos, kp_rot, kd_rot = self.get_stiffness_damping(site_mats)
-
-            motor_targets, x_next, v_next = compliance_control.compliance_control(
-                model=self.mjx_model,
-                data=data,
-                motor_target=motor_targets,
-                motor_torque=data.qfrc_actuator,
-                x_prev=state.info["x_prev"],
-                v_prev=state.info["v_prev"],
-                kp_pos=kp_pos,
-                kd_pos=kd_pos,
-                kp_rot=kp_rot,
-                kd_rot=kd_rot,
-                arm_rows=self._arm_rows,
-                site_ids=self._fingertip_site_ids,
-                dt=self.dt,
-                qpos_indices=self._hand_qids,
-            )
-            state.info["x_prev"] = x_next
-            state.info["v_prev"] = v_next
-
+        motor_targets = self._default_pose + action * self._config.action_scale
+        # NOTE: no clipping.
         data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
         state.info["motor_targets"] = motor_targets
 
+        obs = self._get_obs(data, state.info, state.obs["state"])
         done = self._get_termination(data)
-        obs = self._get_obs(data, state.info)
 
         rewards = self._get_reward(data, action, state.info, state.metrics, done)
         rewards = {
@@ -242,6 +152,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
         state.info["last_last_act"] = state.info["last_act"]
         state.info["last_act"] = action
+        state.info["last_cube_angvel"] = self.get_cube_angvel(data)
         for k, v in rewards.items():
             state.metrics[f"reward/{k}"] = v
 
@@ -251,60 +162,56 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
     def _get_termination(self, data: mjx.Data) -> jax.Array:
         fall_termination = self.get_cube_position(data)[2] < -0.05
-        nans = jp.any(jp.isnan(data.qpos)) | jp.any(jp.isnan(data.qvel))
-        return fall_termination | nans
+        return fall_termination
 
-    def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> mjx_env.Observation:
-        # Hand joint angles.
+    def _get_obs(
+        self, data: mjx.Data, info: dict[str, Any], obs_history: jax.Array
+    ) -> Dict[str, jax.Array]:
         joint_angles = data.qpos[self._hand_qids]
         info["rng"], noise_rng = jax.random.split(info["rng"])
         noisy_joint_angles = (
             joint_angles
             + (2 * jax.random.uniform(noise_rng, shape=joint_angles.shape) - 1)
-            * self._config.obs_noise.level
-            * self._config.obs_noise.scales.joint_pos
+            * self._config.noise_config.level
+            * self._config.noise_config.scales.joint_pos
         )
-
-        # Joint position error history.
-        qpos_error_history = (
-            jp.roll(info["qpos_error_history"], 16)
-            .at[:16]
-            .set(noisy_joint_angles - info["motor_targets"])
-        )
-        info["qpos_error_history"] = qpos_error_history
 
         state = jp.concatenate(
             [
                 noisy_joint_angles,  # 16
-                qpos_error_history,  # 16 * history_len
                 info["last_act"],  # 16
             ]
-        )
+        )  # 48
+        obs_history = jp.roll(obs_history, state.size)
+        obs_history = obs_history.at[: state.size].set(state)
 
         cube_pos = self.get_cube_position(data)
         palm_pos = self.get_palm_position(data)
         cube_pos_error = palm_pos - cube_pos
+        cube_quat = self.get_cube_orientation(data)
+        cube_angvel = self.get_cube_angvel(data)
+        cube_linvel = self.get_cube_linvel(data)
+        fingertip_positions = self.get_fingertip_positions(data)
+        joint_torques = data.actuator_force
 
         privileged_state = jp.concatenate(
             [
                 state,
-                data.qpos[self._hand_qids],
+                joint_angles,
                 data.qvel[self._hand_dqids],
-                self.get_fingertip_positions(data),
+                joint_torques,
+                fingertip_positions,
                 cube_pos_error,
-                self.get_cube_orientation(data),
-                self.get_cube_linvel(data),
-                self.get_cube_angvel(data),
-                data.actuator_force,
+                cube_quat,
+                cube_angvel,
+                cube_linvel,
             ]
         )
 
         return {
-            "state": state,
+            "state": obs_history,
             "privileged_state": privileged_state,
         }
-
-    # Reward terms.
 
     def _get_reward(
         self,
@@ -362,7 +269,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
 def domain_randomize(model: mjx.Model, rng: jax.Array):
     mj_model = CubeRotateZAxis().mj_model
-    # cube_geom_id = mj_model.geom("cube").id
+    cube_geom_id = mj_model.geom("cube").id
     cube_body_id = mj_model.body("cube").id
     hand_qids = mjx_env.get_qpos_ids(mj_model, consts.JOINT_NAMES)
     hand_body_names = [
@@ -400,6 +307,7 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         # Scale cube mass: *U(0.8, 1.2).
         rng, key1, key2 = jax.random.split(rng, 3)
         dmass = jax.random.uniform(key1, minval=0.8, maxval=1.2)
+        cube_mass = model.body_mass[cube_body_id]
         body_inertia = model.body_inertia.at[cube_body_id].set(
             model.body_inertia[cube_body_id] * dmass
         )
