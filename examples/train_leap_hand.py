@@ -100,6 +100,9 @@ _USE_COMPLIANCE = flags.DEFINE_boolean(
 _ACTION_SCALE = flags.DEFINE_float(
     "action_scale", 1.0, "Override the environment action scaling factor"
 )
+_CTRL_DT = flags.DEFINE_float(
+    "ctrl_dt", None, "Override the environment control timestep (seconds)"
+)
 _SEED = flags.DEFINE_integer("seed", 1, "Random seed")
 _NUM_TIMESTEPS = flags.DEFINE_integer(
     "num_timesteps", 200_000_000, "Number of timesteps"
@@ -452,6 +455,8 @@ def main(argv):
         env_cfg["use_compliance"] = True
     if _ACTION_SCALE.present:
         env_cfg["action_scale"] = _ACTION_SCALE.value
+    if _CTRL_DT.present:
+        env_cfg["ctrl_dt"] = _CTRL_DT.value
 
     ppo_params = get_rl_config(_ENV_NAME.value)
 
