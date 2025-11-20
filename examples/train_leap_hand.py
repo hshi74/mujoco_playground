@@ -443,6 +443,18 @@ def format_metrics(metrics: Dict[str, float], step: int) -> Dict[str, float]:
     return grouped
 
 
+def gather_used_flag_notes() -> List[str]:
+    """Return notes for any flags explicitly set by the user."""
+    return sorted(
+        f"{getattr(h, 'name', None) or getattr(h.flag, 'name', None)}={h.value}"
+        for h in globals().values()
+        if getattr(h, "present", False)
+        and hasattr(h, "value")
+        and (getattr(h, "name", None) or getattr(h.flag, "name", None))
+        not in (None, "note")
+    )
+
+
 def main(argv):
     """Run training and evaluation for the specified environment."""
 
@@ -529,6 +541,7 @@ def main(argv):
         note_list.extend(
             [entry.strip() for entry in _NOTE.value.split(",") if entry.strip()]
         )
+    note_list.extend(gather_used_flag_notes())
     notes = ", ".join(note_list)
 
     # Set up logging directory
