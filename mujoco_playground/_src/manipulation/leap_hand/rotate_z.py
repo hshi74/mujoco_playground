@@ -32,10 +32,9 @@ def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.02,
         sim_dt=0.005,
-        action_scale=0.6,
+        action_scale=0.5,
         action_repeat=1,
-        episode_length=500,
-        early_termination=True,
+        episode_length=1000,
         history_len=1,
         noise_config=config_dict.create(
             level=1.0,
@@ -197,7 +196,9 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         return mjx_env.State(data, obs, reward, done, metrics, info)
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
-        motor_targets = self._default_pose + action * self._config.action_scale
+        delta = action * self._config.action_scale
+        motor_targets = state.data.ctrl + delta
+        motor_targets = jp.clip(motor_targets, self._lowers, self._uppers)
 
         if self._config.use_compliance:
             data = state.data
@@ -225,7 +226,6 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
             state.info["x_prev"] = x_next
             state.info["v_prev"] = v_next
 
-        # NOTE: no clipping.
         data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
         state.info["motor_targets"] = motor_targets
 
@@ -250,7 +250,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
     def _get_termination(self, data: mjx.Data) -> jax.Array:
         fall_termination = self.get_cube_position(data)[2] < -0.05
-        return fall_termination
+        nans = jp.any(jp.isnan(data.qpos)) | jp.any(jp.isnan(data.qvel))
+        return fall_termination | nans
 
     def _get_obs(
         self, data: mjx.Data, info: dict[str, Any], obs_history: jax.Array
@@ -395,7 +396,6 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         # Scale cube mass: *U(0.8, 1.2).
         rng, key1, key2 = jax.random.split(rng, 3)
         dmass = jax.random.uniform(key1, minval=0.8, maxval=1.2)
-        # cube_mass = model.body_mass[cube_body_id]
         body_inertia = model.body_inertia.at[cube_body_id].set(
             model.body_inertia[cube_body_id] * dmass
         )
