@@ -684,6 +684,10 @@ def main(argv):
                 key, act_key = jax.random.split(key)
                 action = jit_inference_fn(rollout_state.obs, act_key)[0]
                 rollout_state = eval_env.step(rollout_state, action)
+                # jax.debug.print(
+                #     "Obs: {}", jax.numpy.round(rollout_state.obs["state"], 4)
+                # )
+                # jax.debug.print("Action: {}", jax.numpy.round(action, 4))
                 traj_data = empty_traj.tree_replace(
                     {
                         "data.qpos": rollout_state.data.qpos,

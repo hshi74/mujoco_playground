@@ -19,12 +19,16 @@ from typing import Any, Dict, Optional, Union
 import jax
 import jax.numpy as jp
 import numpy as np
+import yaml
 from ml_collections import config_dict
 from mujoco import mjx
 
 from mujoco_playground._src import mjx_env, reward
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
-from mujoco_playground._src.manipulation.leap_hand import compliance_control
+from mujoco_playground._src.manipulation.leap_hand import (
+    compliance_control,
+    motor_control,
+)
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
 
 
@@ -93,6 +97,55 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         self._floor_geom_id = self._mj_model.geom("floor").id
         self._cube_geom_id = self._mj_model.geom("cube").id
         self._default_pose = self._init_q[self._hand_qids]
+
+        with open(consts.ROBOT_CONFIG_PATH, "r", encoding="utf-8") as handle:
+            robot_config = yaml.safe_load(handle) or {}
+
+        motor_ordering = list(robot_config.get("motors").keys())
+        motor_models = [
+            robot_config["motors"][name].get("motor") for name in motor_ordering
+        ]
+        motor_kp_real = [
+            float(robot_config["motors"][name].get("kp", 0.0))
+            for name in motor_ordering
+        ]
+        motor_kd_real = [
+            float(robot_config["motors"][name].get("kd", 0.0))
+            for name in motor_ordering
+        ]
+        actuator_cfg = robot_config.get("actuators", {})
+        kp_ratio = float(actuator_cfg.get("kp_ratio", 1.0))
+        kd_ratio = float(actuator_cfg.get("kd_ratio", 1.0))
+        motor_kp_sim = [kp / kp_ratio for kp in motor_kp_real]
+        motor_kd_sim = [kd / kd_ratio for kd in motor_kd_real]
+        passive_active_ratio = robot_config["actuators"]["passive_active_ratio"]
+
+        motor_tau_max = []
+        motor_q_dot_max = []
+        motor_tau_q_dot_max = []
+        motor_q_dot_tau_max = []
+        motor_tau_brake_max = []
+        motor_kd_min = []
+        for model_name in motor_models:
+            motor_model = actuator_cfg.get(model_name, {})
+            motor_tau_max.append(float(motor_model.get("tau_max", 0.0)))
+            motor_q_dot_max.append(float(motor_model.get("q_dot_max", 0.0)))
+            motor_tau_q_dot_max.append(float(motor_model.get("tau_q_dot_max", 0.0)))
+            motor_q_dot_tau_max.append(float(motor_model.get("q_dot_tau_max", 0.0)))
+            motor_tau_brake_max.append(float(motor_model.get("tau_brake_max", 0.0)))
+            motor_kd_min.append(float(motor_model.get("kd_min", 0.0)))
+
+        self._motor_control_kwargs = dict(
+            kp=jp.array(motor_kp_sim, dtype=jp.float32),
+            kd=jp.array(motor_kd_sim, dtype=jp.float32),
+            tau_max=jp.array(motor_tau_max, dtype=jp.float32),
+            q_dot_max=jp.array(motor_q_dot_max, dtype=jp.float32),
+            tau_q_dot_max=jp.array(motor_tau_q_dot_max, dtype=jp.float32),
+            q_dot_tau_max=jp.array(motor_q_dot_tau_max, dtype=jp.float32),
+            tau_brake_max=jp.array(motor_tau_brake_max, dtype=jp.float32),
+            kd_min=jp.array(motor_kd_min, dtype=jp.float32),
+            passive_active_ratio=jp.array(passive_active_ratio, dtype=jp.float32),
+        )
 
         self._fingertip_site_ids = np.array(
             [self._mj_model.site(name).id for name in consts.FINGERTIP_NAMES]
@@ -229,7 +282,23 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
             state.info["x_prev"] = x_next
             state.info["v_prev"] = v_next
 
-        data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
+        def pipeline_step(data: mjx.Data, action: jax.Array):
+            def f(data, _):
+                ctrl = motor_control.step(
+                    data.qpos[self._hand_qids],
+                    data.qvel[self._hand_dqids],
+                    data.qacc[self._hand_dqids],
+                    action,
+                    **self._motor_control_kwargs,
+                )
+                data = data.replace(ctrl=ctrl)
+                data = mjx.step(self.mjx_model, data)
+                return data, None
+
+            return jax.lax.scan(f, data, (), self.n_substeps)[0]
+
+        data = pipeline_step(state.data, motor_targets)
+        # data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
         state.info["motor_targets"] = motor_targets
 
         done = self._get_termination(data)

@@ -18,7 +18,7 @@
     <material name="graycube" texture="graycube"/>
     <texture name="dexcube" type="2d" file="reorientation_cube_textures/dex_cube.png"/>
     <material name="dexcube" texture="dexcube"/>
-    <mesh name="cube_mesh" file="meshes/dex_cube.obj" scale="0.035 0.035 0.035"/>
+    <mesh name="cube_mesh" file="assets/dex_cube.obj" scale="0.035 0.035 0.035"/>
   </asset>
 
   <worldbody>
