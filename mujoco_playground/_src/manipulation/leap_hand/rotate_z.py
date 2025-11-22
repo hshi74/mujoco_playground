@@ -58,6 +58,7 @@ def default_config() -> config_dict.ConfigDict:
             ik_rot_kp=1.0,
             ik_rot_kd=0.001,
             target_force=0.0,
+            damp_ratio=1.0,
         ),
         reward_config=config_dict.create(
             scales=config_dict.create(
@@ -195,12 +196,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         kp_rot = k_world[:, 3:, 3:]
 
         # Compute damping matrices
-        kd_pos = compliance_control.get_damping_matrix(
-            kp_pos, 1.0
-        )  # Assuming unit mass for now
-        kd_rot = compliance_control.get_damping_matrix(
-            kp_rot, 1.0
-        )  # Assuming unit inertia for now
+        kd_pos = compliance_control.get_damping_matrix(kp_pos, 1.0) * cfg.damp_ratio
+        kd_rot = compliance_control.get_damping_matrix(kp_rot, 1.0) * cfg.damp_ratio
 
         return kp_pos, kd_pos, kp_rot, kd_rot
 

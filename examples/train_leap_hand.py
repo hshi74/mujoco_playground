@@ -112,6 +112,9 @@ _TANGENT_KP_ROT = flags.DEFINE_float(
 _TARGET_FORCE = flags.DEFINE_float(
     "target_force", None, "Override compliance target force"
 )
+_DAMP_RATIO = flags.DEFINE_float(
+    "damp_ratio", None, "Override compliance damping ratio"
+)
 _IK_POS_KP = flags.DEFINE_float("ik_pos_kp", None, "Override IK position kp")
 _IK_POS_KD = flags.DEFINE_float("ik_pos_kd", None, "Override IK position kd")
 _IK_ROT_KP = flags.DEFINE_float("ik_rot_kp", None, "Override IK rotation kp")
@@ -496,6 +499,8 @@ def main(argv):
             comp_cfg.tangent_rot_stiffness = _TANGENT_KP_ROT.value
         if _TARGET_FORCE.present:
             comp_cfg.target_force = _TARGET_FORCE.value
+        if _DAMP_RATIO.present:
+            comp_cfg.damp_ratio = _DAMP_RATIO.value
         if _IK_POS_KP.present:
             comp_cfg.ik_pos_kp = _IK_POS_KP.value
         if _IK_POS_KD.present:
