@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jp
 import numpy as np
 import yaml
+from jax.scipy.spatial.transform import Rotation as R
 from ml_collections import config_dict
 from mujoco import mjx
 
@@ -52,6 +53,10 @@ def default_config() -> config_dict.ConfigDict:
             tangent_pos_stiffness=400.0,
             normal_rot_stiffness=20.0,
             tangent_rot_stiffness=40.0,
+            ik_pos_kp=400.0,
+            ik_pos_kd=10.0,
+            ik_rot_kp=1.0,
+            ik_rot_kd=0.001,
             target_force=0.0,
         ),
         reward_config=config_dict.create(
@@ -223,23 +228,29 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         data = mjx_env.make_data(
             self._mj_model,
             qpos=qpos,
-            ctrl=q_hand,
+            # ctrl=q_hand,
             qvel=qvel,
             mocap_pos=jp.array([-100.0, -100.0, -100.0]),  # Hide goal for task.
             impl=self._mjx_model.impl.value,
             nconmax=self._config.nconmax,
             njmax=self._config.njmax,
         )
+        site_pos = jp.asarray(
+            data.site_xpos[self._fingertip_site_ids], dtype=jp.float32
+        )
+        site_mats = jp.reshape(
+            data.site_xmat[self._fingertip_site_ids],
+            (len(self._fingertip_site_ids), 3, 3),
+        )
+        site_ori = R.from_matrix(site_mats).as_rotvec().astype(jp.float32)
 
         info = {
             "rng": rng,
             "last_act": jp.zeros(self.mjx_model.nu),
             "last_last_act": jp.zeros(self.mjx_model.nu),
-            "motor_targets": data.ctrl,
+            "motor_targets": q_hand,
             "qpos_error_history": jp.zeros(self._config.history_len * 16),
-            "x_prev": jp.zeros(
-                (len(self._fingertip_site_ids), 6)
-            ),  # TODO:  use default pose
+            "x_prev": jp.concatenate([site_pos, site_ori], axis=-1),
             "v_prev": jp.zeros((len(self._fingertip_site_ids), 6)),
         }
 
@@ -258,6 +269,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         motor_targets = jp.clip(motor_targets, self._lowers, self._uppers)
 
         if self._config.use_compliance:
+            cfg = self._config.compliance_config
             data = state.data
             site_xmat = data.site_xmat[self._fingertip_site_ids]
             site_mats = site_xmat.reshape(-1, 3, 3)
@@ -275,10 +287,14 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
                 kd_pos=kd_pos,
                 kp_rot=kp_rot,
                 kd_rot=kd_rot,
-                target_force=self._config.compliance_config.target_force,
+                target_force=cfg.target_force,
                 arm_rows=self._arm_rows,
                 site_ids=self._fingertip_site_ids,
                 dt=self.dt,
+                ik_pos_kp=cfg.ik_pos_kp,
+                ik_pos_kd=cfg.ik_pos_kd,
+                ik_rot_kp=cfg.ik_rot_kp,
+                ik_rot_kd=cfg.ik_rot_kd,
                 qpos_indices=self._hand_qids,
             )
             state.info["x_prev"] = x_next
