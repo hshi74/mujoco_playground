@@ -422,8 +422,10 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         return jp.linalg.norm(cube_linvel, ord=1, axis=-1)
 
     def _reward_angvel(self, cube_angvel: jax.Array) -> jax.Array:
-        # Unconditionally maximize angvel in the z-direction.
-        return cube_angvel @ jp.array([0.0, 0.0, 1.0])
+        # Encourage spinning about z while penalizing off-axis rotation.
+        z_reward = cube_angvel[2]
+        xy_penalty = jp.linalg.norm(cube_angvel[:2])
+        return z_reward - 0.1 * xy_penalty
 
     def _cost_action_rate(
         self, act: jax.Array, last_act: jax.Array, last_last_act: jax.Array
