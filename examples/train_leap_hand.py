@@ -97,6 +97,21 @@ _DOMAIN_RANDOMIZATION = flags.DEFINE_boolean(
 _USE_COMPLIANCE = flags.DEFINE_boolean(
     "use_compliance", False, "Use compliance control"
 )
+_NORMAL_KP_POS = flags.DEFINE_float(
+    "normal_kp_pos", None, "Override compliance normal position stiffness"
+)
+_TANGENT_KP_POS = flags.DEFINE_float(
+    "tangent_kp_pos", None, "Override compliance tangential position stiffness"
+)
+_NORMAL_KP_ROT = flags.DEFINE_float(
+    "normal_kp_rot", None, "Override compliance normal rotational stiffness"
+)
+_TANGENT_KP_ROT = flags.DEFINE_float(
+    "tangent_kp_rot", None, "Override compliance tangential rotational stiffness"
+)
+_TARGET_FORCE = flags.DEFINE_float(
+    "target_force", None, "Override compliance target force"
+)
 _ACTION_SCALE = flags.DEFINE_float(
     "action_scale", 1.0, "Override the environment action scaling factor"
 )
@@ -465,6 +480,18 @@ def main(argv):
     env_cfg["impl"] = _IMPL.value
     if _USE_COMPLIANCE.value:
         env_cfg["use_compliance"] = True
+    if "compliance_config" in env_cfg:
+        comp_cfg = env_cfg.compliance_config
+        if _NORMAL_KP_POS.present:
+            comp_cfg.normal_pos_stiffness = _NORMAL_KP_POS.value
+        if _TANGENT_KP_POS.present:
+            comp_cfg.tangent_pos_stiffness = _TANGENT_KP_POS.value
+        if _NORMAL_KP_ROT.present:
+            comp_cfg.normal_rot_stiffness = _NORMAL_KP_ROT.value
+        if _TANGENT_KP_ROT.present:
+            comp_cfg.tangent_rot_stiffness = _TANGENT_KP_ROT.value
+        if _TARGET_FORCE.present:
+            comp_cfg.target_force = _TARGET_FORCE.value
     if _ACTION_SCALE.present:
         env_cfg["action_scale"] = _ACTION_SCALE.value
     if _CTRL_DT.present:

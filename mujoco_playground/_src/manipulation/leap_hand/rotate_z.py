@@ -52,6 +52,7 @@ def default_config() -> config_dict.ConfigDict:
             tangent_pos_stiffness=400.0,
             normal_rot_stiffness=20.0,
             tangent_rot_stiffness=40.0,
+            target_force=0.0,
         ),
         reward_config=config_dict.create(
             scales=config_dict.create(
@@ -263,17 +264,18 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
             kp_pos, kd_pos, kp_rot, kd_rot = self.get_stiffness_damping(site_mats)
 
-            motor_targets, x_next, v_next = compliance_control.compliance_control(
+            motor_targets, x_next, v_next, _, _ = compliance_control.compliance_control(
                 model=self.mjx_model,
                 data=data,
                 motor_target=motor_targets,
-                motor_torque=data.qfrc_actuator,
+                motor_torque=data.qfrc_actuator[self._hand_qids],
                 x_prev=state.info["x_prev"],
                 v_prev=state.info["v_prev"],
                 kp_pos=kp_pos,
                 kd_pos=kd_pos,
                 kp_rot=kp_rot,
                 kd_rot=kd_rot,
+                target_force=self._config.compliance_config.target_force,
                 arm_rows=self._arm_rows,
                 site_ids=self._fingertip_site_ids,
                 dt=self.dt,
