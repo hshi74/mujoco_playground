@@ -53,10 +53,8 @@ def default_config() -> config_dict.ConfigDict:
             tangent_pos_stiffness=400.0,
             normal_rot_stiffness=20.0,
             tangent_rot_stiffness=40.0,
-            ik_pos_kp=400.0,
-            ik_pos_kd=10.0,
+            ik_pos_kp=1.0,
             ik_rot_kp=1.0,
-            ik_rot_kd=0.001,
             target_force=0.0,
             damp_ratio=1.0,
         ),
@@ -96,8 +94,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
     def _post_init(self) -> None:
         home_key = self._mj_model.keyframe("home")
         self._init_q = jp.array(home_key.qpos)
-        self._lowers = self._mj_model.actuator_ctrlrange[:, 0]
-        self._uppers = self._mj_model.actuator_ctrlrange[:, 1]
+        self._lowers = self._mj_model.jnt_range[: consts.NU, 0]
+        self._uppers = self._mj_model.jnt_range[: consts.NU, 1]
         self._hand_qids = mjx_env.get_qpos_ids(self.mj_model, consts.JOINT_NAMES)
         self._hand_dqids = mjx_env.get_qvel_ids(self.mj_model, consts.JOINT_NAMES)
         self._cube_qids = mjx_env.get_qpos_ids(self.mj_model, ["cube_freejoint"])
@@ -289,11 +287,11 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
                 site_ids=self._fingertip_site_ids,
                 dt=self.dt,
                 ik_pos_kp=cfg.ik_pos_kp,
-                ik_pos_kd=cfg.ik_pos_kd,
                 ik_rot_kp=cfg.ik_rot_kp,
-                ik_rot_kd=cfg.ik_rot_kd,
                 qpos_indices=self._hand_qids,
             )
+            # action = (motor_targets - self._default_pose) / self._config.action_scale
+            motor_targets = jp.clip(motor_targets, self._lowers, self._uppers)
             state.info["x_prev"] = x_next
             state.info["v_prev"] = v_next
 

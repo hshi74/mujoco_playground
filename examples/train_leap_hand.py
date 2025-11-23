@@ -116,9 +116,7 @@ _DAMP_RATIO = flags.DEFINE_float(
     "damp_ratio", None, "Override compliance damping ratio"
 )
 _IK_POS_KP = flags.DEFINE_float("ik_pos_kp", None, "Override IK position kp")
-_IK_POS_KD = flags.DEFINE_float("ik_pos_kd", None, "Override IK position kd")
 _IK_ROT_KP = flags.DEFINE_float("ik_rot_kp", None, "Override IK rotation kp")
-_IK_ROT_KD = flags.DEFINE_float("ik_rot_kd", None, "Override IK rotation kd")
 _ACTION_SCALE = flags.DEFINE_float(
     "action_scale", 1.0, "Override the environment action scaling factor"
 )
@@ -503,12 +501,8 @@ def main(argv):
             comp_cfg.damp_ratio = _DAMP_RATIO.value
         if _IK_POS_KP.present:
             comp_cfg.ik_pos_kp = _IK_POS_KP.value
-        if _IK_POS_KD.present:
-            comp_cfg.ik_pos_kd = _IK_POS_KD.value
         if _IK_ROT_KP.present:
             comp_cfg.ik_rot_kp = _IK_ROT_KP.value
-        if _IK_ROT_KD.present:
-            comp_cfg.ik_rot_kd = _IK_ROT_KD.value
     if _ACTION_SCALE.present:
         env_cfg["action_scale"] = _ACTION_SCALE.value
     if _CTRL_DT.present:
