@@ -698,7 +698,7 @@ def main(argv):
     scene_option.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
 
     def record_rollouts(
-        policy_fn, prefix: str, num_videos: int, render_stride: int = 2
+        policy_fn, prefix: str, num_videos: int, render_stride: int = 1
     ):
         """Runs rollouts with the provided policy and saves rendered videos."""
         if num_videos <= 0:
@@ -893,12 +893,7 @@ def main(argv):
 
     print("Starting inference...")
     if eval_env is not None and _NUM_EVAL_VIDEOS.value > 0:
-        record_rollouts(
-            final_policy,
-            prefix="eval",
-            num_videos=_NUM_EVAL_VIDEOS.value,
-            render_stride=2,
-        )
+        record_rollouts(final_policy, prefix="eval", num_videos=_NUM_EVAL_VIDEOS.value)
 
     hidden_sizes = []
     policy_obs_key = "state"
