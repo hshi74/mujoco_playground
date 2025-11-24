@@ -20,7 +20,6 @@ import jax
 import jax.numpy as jp
 import numpy as np
 import yaml
-from jax.scipy.spatial.transform import Rotation as R
 from ml_collections import config_dict
 from mujoco import mjx
 
@@ -37,7 +36,7 @@ def default_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.02,
         sim_dt=0.01,
-        action_scale=1.0,
+        action_scale=0.5,
         action_repeat=1,
         episode_length=1000,
         history_len=1,
@@ -155,7 +154,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         self._fingertip_site_ids = np.array(
             [self._mj_model.site(name).id for name in consts.FINGERTIP_NAMES]
         )
-        self._arm_rows = np.arange(len(consts.ACTUATOR_NAMES))
+        self._qd_indices = np.arange(len(consts.ACTUATOR_NAMES))
 
     def get_stiffness_damping(
         self, site_mats: jax.Array
@@ -230,23 +229,13 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
             nconmax=self._config.nconmax,
             njmax=self._config.njmax,
         )
-        site_pos = jp.asarray(
-            data.site_xpos[self._fingertip_site_ids], dtype=jp.float32
-        )
-        site_mats = jp.reshape(
-            data.site_xmat[self._fingertip_site_ids],
-            (len(self._fingertip_site_ids), 3, 3),
-        )
-        site_ori = R.from_matrix(site_mats).as_rotvec().astype(jp.float32)
 
         info = {
             "rng": rng,
             "last_act": jp.zeros(self.mjx_model.nu),
             "last_last_act": jp.zeros(self.mjx_model.nu),
             "motor_targets": q_hand,
-            "qpos_error_history": jp.zeros(self._config.history_len * 16),
-            "x_prev": jp.concatenate([site_pos, site_ori], axis=-1),
-            "v_prev": jp.zeros((len(self._fingertip_site_ids), 6)),
+            "qpos_error_history": jp.zeros(self._config.history_len * consts.NQ),
         }
 
         metrics = {}
@@ -271,29 +260,20 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
             kp_pos, kd_pos, kp_rot, kd_rot = self.get_stiffness_damping(site_mats)
 
-            motor_targets, x_next, v_next, _, _ = compliance_control.compliance_control(
+            motor_targets = compliance_control.compliance_control(
                 model=self.mjx_model,
                 data=data,
                 motor_target=motor_targets,
-                motor_torque=data.qfrc_actuator[self._hand_qids],
-                x_prev=state.info["x_prev"],
-                v_prev=state.info["v_prev"],
                 kp_pos=kp_pos,
                 kd_pos=kd_pos,
                 kp_rot=kp_rot,
                 kd_rot=kd_rot,
                 target_force=cfg.target_force,
-                arm_rows=self._arm_rows,
+                q_indices=self._hand_qids,
+                qd_indices=self._qd_indices,
                 site_ids=self._fingertip_site_ids,
-                dt=self.dt,
-                ik_pos_kp=cfg.ik_pos_kp,
-                ik_rot_kp=cfg.ik_rot_kp,
-                qpos_indices=self._hand_qids,
             )
-            # action = (motor_targets - self._default_pose) / self._config.action_scale
             motor_targets = jp.clip(motor_targets, self._lowers, self._uppers)
-            state.info["x_prev"] = x_next
-            state.info["v_prev"] = v_next
 
         def pipeline_step(data: mjx.Data, action: jax.Array):
             def f(data, _):
@@ -350,8 +330,8 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
         # Joint position error history.
         qpos_error_history = (
-            jp.roll(info["qpos_error_history"], 16)
-            .at[:16]
+            jp.roll(info["qpos_error_history"], consts.NQ)
+            .at[: consts.NQ]
             .set(noisy_joint_angles - info["motor_targets"])
         )
         info["qpos_error_history"] = qpos_error_history
